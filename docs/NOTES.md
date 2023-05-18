@@ -1,7 +1,7 @@
 # Notes
 
 WASI support in .NET 8
-    
+
 > Steve Sanderson
 > @stevensanderson
 > Just published a video: an update on WASI support in .NET 8, and some prototypes that push the boundaries of what you can do with .NET + WebAssembly
@@ -18,3 +18,7 @@ WASI support in .NET 8
 
 - https://github.com/richlander/
   - https://github.com/richlander/wasm-samples
+
+---
+
+(`dotnet add package wasmtime` [nuget](https://www.nuget.org/packages/Wasmtime))
