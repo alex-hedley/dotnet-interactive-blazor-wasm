@@ -11,6 +11,10 @@
 - [wasmtime](wasmtime.md)
 - [wasi-sdk](wasi-sdk.md)
 
+## Blazor REPL
+
+- [BlazorApp](../src/BlazorApp/README.md) — interactive C# REPL running client-side in .NET 8 WebAssembly
+
 ## Project
 
 - [Contributors](CONTRIBUTORS.md)
