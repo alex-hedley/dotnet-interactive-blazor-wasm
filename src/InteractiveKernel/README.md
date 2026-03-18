@@ -17,10 +17,10 @@ Each line of stdin is treated as one execution request. The result is written ba
 
 ### Build requirements
 
-- .NET 8 SDK
-- `wasi-experimental-net8` workload:
+- .NET 10 SDK
+- `wasi-experimental` workload:
   ```bash
-  dotnet workload install wasi-experimental-net8
+  dotnet workload install wasi-experimental
   ```
 
 ### Publish requirements
@@ -41,7 +41,7 @@ dotnet build src/InteractiveKernel
 dotnet publish src/InteractiveKernel -c Release
 ```
 
-The published output is in `bin/Release/net8.0/wasi-wasm/publish/`.
+The published output is in `bin/Release/net10.0/wasi-wasm/publish/`.
 
 ## Running
 
@@ -49,7 +49,7 @@ The published output is in `bin/Release/net8.0/wasi-wasm/publish/`.
 
 ```bash
 echo '{"code":"Console.WriteLine(\"Hello from .NET Interactive WASI!\");"}' \
-  | wasmtime bin/Release/net8.0/wasi-wasm/publish/dotnet.wasm --dir=.
+  | wasmtime bin/Release/net10.0/wasi-wasm/publish/dotnet.wasm --dir=.
 # → {"output":"Hello from .NET Interactive WASI!\n","errors":[]}
 ```
 
