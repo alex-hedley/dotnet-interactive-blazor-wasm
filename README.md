@@ -9,47 +9,84 @@ A C# interactive coding environment built with [Blazor WebAssembly](https://dotn
 ## Architecture
 
 ```
-┌───────────────────────────────────────────┐
-│  Browser                                  │
-│                                           │
-│  BlazorApp (WASM)  ──HTTP──▶  POST /api/execute
-│  src/BlazorApp/               │           │
-└───────────────────────────────┼───────────┘
-                                │
-                    ┌───────────▼──────────────────┐
-                    │  InteractiveServer (ASP.NET)  │
-                    │  src/InteractiveServer/        │
-                    │                               │
-                    │  dotnet-interactive stdio ────▶ C# kernel
-                    └───────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  Browser                                             │
+│                                                      │
+│  BlazorApp (WASM)  ──HTTP──▶  POST /api/execute      │
+│  src/BlazorApp/                                      │
+└──────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────▼────────────────────────┐
+              │  InteractiveServer (ASP.NET Core)       │
+              │  src/InteractiveServer/                 │
+              │                                        │
+              │  dotnet-interactive stdio ─────────────▶ C# kernel
+              └────────────────────────────────────────┘
+
+── WASI alternative (in-browser) ──────────────────────
+              src/InteractiveKernel/  (wasi-wasm)
+              Microsoft.DotNet.Interactive.CSharpKernel
+              communicates via stdin / stdout JSON
+              run with: wasmtime  or  a browser WASI shim
 ```
 
 | Component | Description |
 |---|---|
 | **BlazorApp** | Blazor WASM frontend — code editor UI, calls the API |
-| **InteractiveServer** | ASP.NET Core server — wraps `dotnet-interactive` to execute C# code |
+| **InteractiveServer** | ASP.NET Core server wrapping `dotnet-interactive` — for local / server deployment |
+| **InteractiveKernel** | WASI console app using `CSharpKernel` directly — compile to `.wasm`, run with `wasmtime` or a browser WASI shim |
 
 ## Getting Started
 
-### 1. Prerequisites
+### Option A — Local server (`InteractiveServer`)
+
+#### 1. Prerequisites
 
 ```bash
 dotnet tool install -g Microsoft.dotnet-interactive
 ```
 
-### 2. Start the InteractiveServer
+#### 2. Start the server
 
 ```bash
 dotnet run --project src/InteractiveServer
 # Listening on http://localhost:5000
 ```
 
-### 3. Start the Blazor WASM app
+#### 3. Start the Blazor WASM app
 
 ```bash
 dotnet run --project src/BlazorApp
 # Open http://localhost:5136 in your browser
 ```
+
+### Option B — WASI kernel (`InteractiveKernel`)
+
+#### 1. Prerequisites
+
+```bash
+dotnet workload install wasi-experimental-net8
+
+# For producing the .wasm binary you also need wasi-sdk:
+# https://github.com/WebAssembly/wasi-sdk/releases
+export WASI_SDK_PATH=/opt/wasi-sdk
+```
+
+#### 2. Build and publish to WASM
+
+```bash
+dotnet publish src/InteractiveKernel -c Release
+# Output: src/InteractiveKernel/bin/Release/net8.0/wasi-wasm/publish/
+```
+
+#### 3. Run with wasmtime
+
+```bash
+echo '{"code":"Console.WriteLine(\"Hello from WASI!\");"}' \
+  | wasmtime dotnet.wasm --dir=.
+```
+
+See [`src/InteractiveKernel/README.md`](src/InteractiveKernel/README.md) for details on browser hosting with a JavaScript WASI shim.
 
 ## Docs
 
