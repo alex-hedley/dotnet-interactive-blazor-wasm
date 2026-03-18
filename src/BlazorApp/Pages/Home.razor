@@ -12,7 +12,7 @@
     <h1>🧪 .NET Interactive REPL</h1>
     <p class="subtitle">
         Execute C# code directly in your browser, powered by
-        <strong>.NET 8 WebAssembly</strong> and <strong>Roslyn</strong>.
+        <strong>.NET 10 WebAssembly</strong> and <strong>Roslyn</strong>.
         No server required — all execution happens client-side.
     </p>
 </div>
@@ -86,7 +86,7 @@
     <div class="info-box mt-4">
         <h6>ℹ️ About this REPL</h6>
         <p>
-            This interactive C# REPL runs entirely in your browser using .NET 8 WebAssembly and the
+            This interactive C# REPL runs entirely in your browser using .NET 10 WebAssembly and the
             <a href="https://github.com/dotnet/roslyn" target="_blank" rel="noopener noreferrer">Roslyn</a>
             scripting engine — the same engine that powers
             <a href="https://github.com/dotnet/interactive" target="_blank" rel="noopener noreferrer">.NET Interactive</a>.
@@ -157,25 +157,68 @@
     {
         try
         {
-            _initStatus = "Downloading assembly list…";
+            _initStatus = "Reading boot config…";
             StateHasChanged();
 
-            // Read blazor.boot.json to get the exact filenames of all managed assemblies
-            using var bootJson = await Http.GetFromJsonAsync<JsonDocument>("_framework/blazor.boot.json");
-            var assemblyNames = bootJson!
-                .RootElement
-                .GetProperty("resources")
-                .GetProperty("assembly")
-                .EnumerateObject()
-                .Select(p => p.Name)
-                .ToList();
+            // Discover managed assemblies from the boot config.
+            // .NET 10+: manifest is embedded in _framework/dotnet.js between
+            //           /*json-start*/ and /*json-end*/ markers; resources.assembly
+            //           is an array of {virtualPath, name (hashed), integrity, cache}.
+            // .NET 8:   _framework/blazor.boot.json; resources.assembly is an object
+            //           whose *keys* are the plain filenames.
+            List<string> assemblyFileNames;
 
-            _initStatus = $"Loading {assemblyNames.Count} assemblies for Roslyn…";
+            const string startMarker = "/*json-start*/";
+            const string endMarker   = "/*json-end*/";
+
+            var dotnetJs = await Http.GetStringAsync("_framework/dotnet.js");
+            var startIdx = dotnetJs.IndexOf(startMarker, StringComparison.Ordinal);
+            var endIdx   = dotnetJs.IndexOf(endMarker,   StringComparison.Ordinal);
+
+            if (startIdx >= 0 && endIdx > startIdx)
+            {
+                // .NET 10+ path
+                var jsonStr = dotnetJs.Substring(
+                    startIdx + startMarker.Length,
+                    endIdx - startIdx - startMarker.Length);
+
+                using var bootJson = JsonDocument.Parse(jsonStr);
+                var resources = bootJson.RootElement.GetProperty("resources");
+
+                // In .NET 10 the manifest has two assembly categories:
+                //   "coreAssembly" – System.Private.CoreLib and other core assemblies
+                //   "assembly"     – all other managed assemblies
+                // Both must be included so Roslyn has all type definitions.
+                static IEnumerable<string> ReadNames(JsonElement root, string key)
+                {
+                    if (root.TryGetProperty(key, out var arr) && arr.ValueKind == JsonValueKind.Array)
+                        return arr.EnumerateArray().Select(a => a.GetProperty("name").GetString()!);
+                    return [];
+                }
+
+                assemblyFileNames = ReadNames(resources, "coreAssembly")
+                    .Concat(ReadNames(resources, "assembly"))
+                    .ToList();
+            }
+            else
+            {
+                // .NET 8 fallback path
+                using var bootJson = await Http.GetFromJsonAsync<JsonDocument>("_framework/blazor.boot.json");
+                assemblyFileNames = bootJson!
+                    .RootElement
+                    .GetProperty("resources")
+                    .GetProperty("assembly")
+                    .EnumerateObject()
+                    .Select(p => p.Name)
+                    .ToList();
+            }
+
+            _initStatus = $"Loading {assemblyFileNames.Count} assemblies for Roslyn…";
             StateHasChanged();
 
             // Download all assemblies in parallel and create image-based MetadataReferences.
             // Image-based references work in WASM where Assembly.Location is always empty.
-            var downloadTasks = assemblyNames.Select(async name =>
+            var downloadTasks = assemblyFileNames.Select(async name =>
             {
                 try
                 {
