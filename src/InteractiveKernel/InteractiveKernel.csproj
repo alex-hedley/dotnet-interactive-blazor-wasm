@@ -24,6 +24,11 @@
       and executes C# code using Roslyn — no child process required.
     -->
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.26120.1" />
+    <!--
+      Microsoft.DotNet.Interactive.FSharp provides the FSharpKernel for executing
+      F# code.
+    -->
+    <PackageReference Include="Microsoft.DotNet.Interactive.FSharp" Version="1.0.0-beta.26120.1" />
   </ItemGroup>
 
 </Project>

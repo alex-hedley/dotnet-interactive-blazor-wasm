@@ -1,20 +1,22 @@
 // InteractiveKernel — WASI console app
 //
 // This program is compiled to WebAssembly (wasi-wasm) and wraps the
-// Microsoft.DotNet.Interactive CSharpKernel directly — no child-process
+// Microsoft.DotNet.Interactive kernels directly — no child-process
 // spawning, no HTTP server — so it can run inside any WASI runtime
 // (wasmtime, Node.js with wasi support, or a browser via a JS WASI shim).
 //
 // Communication protocol (stdin / stdout):
 //
 //   stdin  ← one JSON object per line:
-//             { "code": "<C# code to execute>" }
+//             { "code": "<code to execute>", "language": "csharp" }
+//
+//             Supported languages: "csharp" (default), "fsharp"
 //
 //   stdout → one JSON object per line:
 //             { "output": "<captured stdout>", "errors": ["..."] }
 //
 // Example (wasmtime):
-//   echo '{"code":"Console.WriteLine(\"Hello!\");"}' \
+//   echo '{"code":"Console.WriteLine(\"Hello!\");","language":"csharp"}' \
 //     | wasmtime dotnet.wasm --dir=.
 
 using System;
@@ -25,12 +27,17 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.CSharp;
+using Microsoft.DotNet.Interactive.FSharp;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
 
-using var kernel = new CSharpKernel();
+// Create both kernels once at startup so state is preserved across submissions.
+using var csharpKernel = new CSharpKernel();
+using var fsharpKernel = new FSharpKernel();
 
 const int TimeoutSeconds = 30;
+
+var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 
 string? line;
 while ((line = Console.ReadLine()) != null)
@@ -41,8 +48,7 @@ while ((line = Console.ReadLine()) != null)
     KernelRequest? req;
     try
     {
-        req = JsonSerializer.Deserialize<KernelRequest>(line,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        req = JsonSerializer.Deserialize<KernelRequest>(line, jsonOptions);
     }
     catch
     {
@@ -55,6 +61,14 @@ while ((line = Console.ReadLine()) != null)
         WriteResponse(null, new[] { "Request must contain a non-empty 'code' field." });
         continue;
     }
+
+    // Select kernel based on the optional "language" field (default: csharp).
+    Kernel kernel = (req.Language?.ToLowerInvariant()) switch
+    {
+        "fsharp" or "f#" => fsharpKernel,
+        "csharp" or "c#" or null or "" => csharpKernel,
+        _ => throw new InvalidOperationException($"Unsupported language '{req.Language}'. Supported values: csharp, fsharp.")
+    };
 
     var output = new StringBuilder();
     var errors = new List<string>();
@@ -96,12 +110,16 @@ while ((line = Console.ReadLine()) != null)
         }
     });
 
-    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(TimeoutSeconds));
-    await kernel.SendAsync(new SubmitCode(req.Code), cts.Token);
-
     try
     {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(TimeoutSeconds));
+        await kernel.SendAsync(new SubmitCode(req.Code), cts.Token);
+
         await tcs.Task.WaitAsync(TimeSpan.FromSeconds(TimeoutSeconds));
+    }
+    catch (InvalidOperationException ex)
+    {
+        errors.Add(ex.Message);
     }
     catch (TimeoutException)
     {
@@ -119,5 +137,5 @@ static void WriteResponse(string? output, string[]? errors)
 
 // ── Request / response types ──────────────────────────────────────────────────
 
-record KernelRequest(string Code);
+record KernelRequest(string Code, string? Language = null);
 record KernelResponse(string Output, IReadOnlyList<string> Errors);

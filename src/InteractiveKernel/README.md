@@ -1,17 +1,28 @@
 # InteractiveKernel
 
-A **WASI-targeted** console app that wraps the [.NET Interactive](https://github.com/dotnet/interactive) `CSharpKernel` for compiling and executing C# code.
+A **WASI-targeted** console app that wraps the [.NET Interactive](https://github.com/dotnet/interactive) kernels for compiling and executing code in multiple languages.
 
 Compiled to WebAssembly via the `wasi-wasm` runtime identifier, it can be run in any WASI-capable runtime — including **in the browser** using a JavaScript WASI shim.
+
+## Supported languages
+
+| Language | `"language"` value  |
+|----------|---------------------|
+| C#       | `"csharp"` (default) |
+| F#       | `"fsharp"`           |
+
+> **VB.NET** is not supported — the .NET Interactive project does not publish a VB.NET kernel package.
 
 ## How it works
 
 ```
-stdin  →  { "code": "<C# to run>" }  (one JSON object per line)
+stdin  →  { "code": "<code to run>", "language": "csharp" }  (one JSON object per line)
 stdout ←  { "output": "...", "errors": [] }
 ```
 
-Each line of stdin is treated as one execution request. The result is written back to stdout as a single line of JSON.
+The `"language"` field is optional and defaults to `"csharp"`. Each line of stdin is treated as one execution request. The result is written back to stdout as a single line of JSON.
+
+Both kernels are created at startup and reused across requests, so state (variables, `open` statements, etc.) is preserved within each language session.
 
 ## Prerequisites
 
@@ -48,9 +59,15 @@ The published output is in `bin/Release/net10.0/wasi-wasm/publish/`.
 ### wasmtime (CLI)
 
 ```bash
-echo '{"code":"Console.WriteLine(\"Hello from .NET Interactive WASI!\");"}' \
+# C# (default)
+echo '{"code":"Console.WriteLine(\"Hello from C#!\");"}' \
   | wasmtime bin/Release/net10.0/wasi-wasm/publish/dotnet.wasm --dir=.
-# → {"output":"Hello from .NET Interactive WASI!\n","errors":[]}
+# → {"output":"Hello from C#!\n","errors":[]}
+
+# F#
+echo '{"code":"printfn \"Hello from F#!\"","language":"fsharp"}' \
+  | wasmtime bin/Release/net10.0/wasi-wasm/publish/dotnet.wasm --dir=.
+# → {"output":"Hello from F#!\n","errors":[]}
 ```
 
 ### Browser (JavaScript WASI shim)
