@@ -1,0 +1,374 @@
+@page "/"
+@using Microsoft.CodeAnalysis
+@using Microsoft.CodeAnalysis.CSharp
+@using System.IO
+@using System.Reflection
+@using System.Text.Json
+@inject HttpClient Http
+
+<PageTitle>.NET Interactive REPL</PageTitle>
+
+<div class="repl-header">
+    <h1>🧪 .NET Interactive REPL</h1>
+    <p class="subtitle">
+        Execute C# code directly in your browser, powered by
+        <strong>.NET 10 WebAssembly</strong> and <strong>Roslyn</strong>.
+        No server required — all execution happens client-side.
+    </p>
+</div>
+
+<div class="repl-container">
+
+    <div class="mb-3">
+        <span class="fw-semibold me-2">Examples:</span>
+        @foreach (var example in _examples)
+        {
+            <button class="btn btn-sm btn-outline-secondary me-1 mb-1"
+                    @onclick="() => LoadExample(example)">
+                @example.Name
+            </button>
+        }
+    </div>
+
+    <div class="mb-2">
+        <label for="code-editor" class="form-label fw-semibold">C# Code</label>
+        @if (_initStatus is not null)
+        {
+            <div class="alert alert-info py-2">
+                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                @_initStatus
+            </div>
+        }
+        <textarea id="code-editor"
+                  class="form-control code-editor"
+                  rows="12"
+                  @bind="_code"
+                  @bind:event="oninput"
+                  spellcheck="false"
+                  placeholder="Enter C# code here..."></textarea>
+    </div>
+
+    <div class="mb-3 d-flex gap-2 flex-wrap">
+        <button class="btn btn-primary" @onclick="RunCodeAsync" disabled="@(_isRunning || _initStatus is not null)">
+            @if (_isRunning)
+            {
+                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                <span>Running...</span>
+            }
+            else
+            {
+                <span>▶ Run</span>
+            }
+        </button>
+        <button class="btn btn-outline-secondary" @onclick="ClearOutput" disabled="@(_isRunning || _initStatus is not null)">
+            Clear Output
+        </button>
+        <button class="btn btn-outline-danger" @onclick="ClearAll" disabled="@(_isRunning || _initStatus is not null)">
+            Clear All
+        </button>
+    </div>
+
+    @if (_hasOutput)
+    {
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Output</label>
+            @if (!string.IsNullOrEmpty(_output))
+            {
+                <pre class="output-panel output-success">@_output</pre>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <pre class="output-panel output-error">@_error</pre>
+            }
+        </div>
+    }
+
+    <div class="info-box mt-4">
+        <h6>ℹ️ About this REPL</h6>
+        <p>
+            This interactive C# REPL runs entirely in your browser using .NET 10 WebAssembly and the
+            <a href="https://github.com/dotnet/roslyn" target="_blank" rel="noopener noreferrer">Roslyn</a>
+            scripting engine — the same engine that powers
+            <a href="https://github.com/dotnet/interactive" target="_blank" rel="noopener noreferrer">.NET Interactive</a>.
+        </p>
+        <p class="mb-0">
+            The following namespaces are pre-imported:
+            <code>System</code>, <code>System.Console</code>, <code>System.Math</code>,
+            <code>System.Linq</code>, <code>System.Collections.Generic</code>, <code>System.Text</code>.
+        </p>
+    </div>
+
+</div>
+
+@code {
+    private string _code = "// Write your C# code here\nConsole.WriteLine(\"Hello from .NET Interactive in Blazor WASM!\");";
+    private string _output = string.Empty;
+    private string _error = string.Empty;
+    private bool _isRunning;
+    private bool _hasOutput;
+    private string? _initStatus = "Initialising Roslyn scripting engine…";
+    private List<MetadataReference>? _references;
+
+    // Pre-imported namespaces prepended to every script
+    private static readonly string DefaultUsings =
+        "using System;\n" +
+        "using System.Linq;\n" +
+        "using System.Collections.Generic;\n" +
+        "using System.Text;\n" +
+        "using System.Threading.Tasks;\n";
+
+    private record Example(string Name, string Code);
+
+    private readonly List<Example> _examples = new()
+    {
+        new("Hello World",
+            "Console.WriteLine(\"Hello, World!\");"),
+        new("Math",
+            "var result = Math.Sqrt(2);\nConsole.WriteLine($\"√2 ≈ {result:F6}\");"),
+        new("LINQ",
+            "var numbers = Enumerable.Range(1, 10);\n" +
+            "Console.WriteLine($\"Sum 1‥10 = {numbers.Sum()}\");\n" +
+            "Console.WriteLine(string.Join(\", \", numbers.Where(n => n % 2 == 0)));"),
+        new("Collections",
+            "var fruits = new List<string> { \"Apple\", \"Banana\", \"Cherry\" };\n" +
+            "fruits.Add(\"Date\");\n" +
+            "foreach (var f in fruits.OrderBy(x => x))\n" +
+            "    Console.WriteLine($\"- {f}\");"),
+        new("String ops",
+            "var text = \"Hello, .NET Interactive!\";\n" +
+            "Console.WriteLine(text.ToUpper());\n" +
+            "Console.WriteLine(text.Replace(\"Hello\", \"Greetings\"));\n" +
+            "Console.WriteLine($\"Length: {text.Length}\");"),
+        new("DateTime",
+            "Console.WriteLine($\"UTC now : {DateTime.UtcNow:o}\");\n" +
+            "Console.WriteLine($\"Day     : {DateTime.Today.DayOfWeek}\");"),
+        new("Dictionary",
+            "var scores = new Dictionary<string, int>\n" +
+            "{\n" +
+            "    [\"Alice\"] = 95,\n" +
+            "    [\"Bob\"]   = 87,\n" +
+            "    [\"Carol\"] = 92,\n" +
+            "};\n" +
+            "foreach (var (name, score) in scores.OrderByDescending(x => x.Value))\n" +
+            "    Console.WriteLine($\"{name,-8} {score}\");"),
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _initStatus = "Reading boot config…";
+            StateHasChanged();
+
+            // Discover managed assemblies from the boot config.
+            // .NET 10+: manifest is embedded in _framework/dotnet.js between
+            //           /*json-start*/ and /*json-end*/ markers; resources.assembly
+            //           is an array of {virtualPath, name (hashed), integrity, cache}.
+            // .NET 8:   _framework/blazor.boot.json; resources.assembly is an object
+            //           whose *keys* are the plain filenames.
+            List<string> assemblyFileNames;
+
+            const string startMarker = "/*json-start*/";
+            const string endMarker   = "/*json-end*/";
+
+            var dotnetJs = await Http.GetStringAsync("_framework/dotnet.js");
+            var startIdx = dotnetJs.IndexOf(startMarker, StringComparison.Ordinal);
+            var endIdx   = dotnetJs.IndexOf(endMarker,   StringComparison.Ordinal);
+
+            if (startIdx >= 0 && endIdx > startIdx)
+            {
+                // .NET 10+ path
+                var jsonStr = dotnetJs.Substring(
+                    startIdx + startMarker.Length,
+                    endIdx - startIdx - startMarker.Length);
+
+                using var bootJson = JsonDocument.Parse(jsonStr);
+                var resources = bootJson.RootElement.GetProperty("resources");
+
+                // In .NET 10 the manifest has two assembly categories:
+                //   "coreAssembly" – System.Private.CoreLib and other core assemblies
+                //   "assembly"     – all other managed assemblies
+                // Both must be included so Roslyn has all type definitions.
+                static IEnumerable<string> ReadNames(JsonElement root, string key)
+                {
+                    if (root.TryGetProperty(key, out var arr) && arr.ValueKind == JsonValueKind.Array)
+                        return arr.EnumerateArray().Select(a => a.GetProperty("name").GetString()!);
+                    return [];
+                }
+
+                assemblyFileNames = ReadNames(resources, "coreAssembly")
+                    .Concat(ReadNames(resources, "assembly"))
+                    .ToList();
+            }
+            else
+            {
+                // .NET 8 fallback path
+                using var bootJson = await Http.GetFromJsonAsync<JsonDocument>("_framework/blazor.boot.json");
+                assemblyFileNames = bootJson!
+                    .RootElement
+                    .GetProperty("resources")
+                    .GetProperty("assembly")
+                    .EnumerateObject()
+                    .Select(p => p.Name)
+                    .ToList();
+            }
+
+            _initStatus = $"Loading {assemblyFileNames.Count} assemblies for Roslyn…";
+            StateHasChanged();
+
+            // Download all assemblies in parallel and create image-based MetadataReferences.
+            // Image-based references work in WASM where Assembly.Location is always empty.
+            var downloadTasks = assemblyFileNames.Select(async name =>
+            {
+                try
+                {
+                    var bytes = await Http.GetByteArrayAsync($"_framework/{name}");
+                    return (MetadataReference?)MetadataReference.CreateFromImage(bytes);
+                }
+                catch
+                {
+                    return null;
+                }
+            });
+
+            var results = await Task.WhenAll(downloadTasks);
+            _references = results
+                .Where(r => r is not null)
+                .Cast<MetadataReference>()
+                .ToList();
+
+            _initStatus = null;
+        }
+        catch (Exception ex)
+        {
+            _initStatus = null;
+            _error = $"Failed to initialise scripting engine: {ex.Message}";
+            _hasOutput = true;
+        }
+    }
+
+    private async Task RunCodeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_code) || _references is null)
+            return;
+
+        _isRunning = true;
+        _output = string.Empty;
+        _error = string.Empty;
+        _hasOutput = false;
+        StateHasChanged();
+
+        try
+        {
+            // Prepend default using directives so scripts don't need them
+            var fullCode = DefaultUsings + _code;
+
+            var parseOptions = new CSharpParseOptions(
+                LanguageVersion.Latest,
+                DocumentationMode.None,
+                SourceCodeKind.Script);
+
+            var syntaxTree = CSharpSyntaxTree.ParseText(fullCode, parseOptions);
+
+            // Use CSharpCompilation.CreateScriptCompilation rather than CSharpScript.RunAsync.
+            // The scripting layer (CSharpScript) calls MetadataReference.CreateFromAssemblyInternal
+            // which fails in WASM because Assembly.Location is empty.  The compilation layer
+            // accepts explicit MetadataReference objects and never touches file paths.
+            var compilation = CSharpCompilation.CreateScriptCompilation(
+                assemblyName: "__submission__",
+                syntaxTree: syntaxTree,
+                references: _references);
+
+            using var ms = new MemoryStream();
+            var emitResult = compilation.Emit(ms);
+
+            if (!emitResult.Success)
+            {
+                var errors = emitResult.Diagnostics
+                    .Where(d => d.Severity == DiagnosticSeverity.Error)
+                    .Select(d => d.GetMessage());
+                _error = "Compilation error(s):\n" + string.Join("\n", errors);
+            }
+            else
+            {
+                ms.Seek(0, SeekOrigin.Begin);
+                var assembly = Assembly.Load(ms.ToArray());
+
+                // Roslyn script compilations emit a type with a static "<Factory>" method.
+                MethodInfo? factory = null;
+                foreach (var type in assembly.GetTypes())
+                {
+                    factory = type.GetMethod(
+                        "<Factory>",
+                        BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (factory is not null)
+                        break;
+                }
+
+                if (factory is null)
+                {
+                    _error = "Could not find script entry point in emitted assembly.";
+                }
+                else
+                {
+                    var writer = new StringWriter();
+                    var originalOut = Console.Out;
+                    var originalError = Console.Error;
+                    Console.SetOut(writer);
+                    Console.SetError(writer);
+                    try
+                    {
+                        // The factory signature is:  static Task<T> <Factory>(object[] submissionArray)
+                        // submissionArray[0] holds the globals (null when none), [1] is previous submission.
+                        var submissionArray = new object?[2];
+                        var result = factory.Invoke(null, new object[] { submissionArray! });
+                        if (result is Task task)
+                            await task;
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                        Console.SetError(originalError);
+                    }
+
+                    _output = writer.ToString();
+                    if (string.IsNullOrEmpty(_output))
+                        _output = "(Script completed with no output)";
+                }
+            }
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            _error = $"Runtime error ({ex.InnerException.GetType().Name}): {ex.InnerException.Message}";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error ({ex.GetType().Name}): {ex.Message}";
+        }
+        finally
+        {
+            _isRunning = false;
+            _hasOutput = true;
+            StateHasChanged();
+        }
+    }
+
+    private void LoadExample(Example example)
+    {
+        _code = example.Code;
+        ClearOutput();
+    }
+
+    private void ClearOutput()
+    {
+        _output = string.Empty;
+        _error = string.Empty;
+        _hasOutput = false;
+    }
+
+    private void ClearAll()
+    {
+        _code = string.Empty;
+        ClearOutput();
+    }
+}

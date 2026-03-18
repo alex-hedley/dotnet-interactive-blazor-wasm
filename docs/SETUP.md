@@ -3,7 +3,8 @@
 ## PreReqs
 
 - [.NET 8.0](dotNET8.md)
-- [wasitime](wasitime.md)
+- [wasmtime](wasmtime.md)
+
 - [wasi-sdk](wasi-sdk.md)
 
 ## Steps
@@ -38,7 +39,7 @@ MSBuild version 17.7.0-preview-23251-02+59879b095 for .NET
 
 `dotnet run`
 
-- [wasitime](wasitime.md)
+- [wasmtime](wasmtime.md)
 
 ```bash
 WasmAppHost --runtime-config /*/src/MyApp/bin/Debug/net8.0/wasi-wasm/AppBundle/MyApp.runtimeconfig.json
