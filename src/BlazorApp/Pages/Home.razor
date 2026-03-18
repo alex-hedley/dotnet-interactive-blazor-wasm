@@ -6,11 +6,18 @@
 <PageTitle>.NET Interactive (WASM)</PageTitle>
 
 <h1>🚀 .NET Interactive — Blazor WASM</h1>
-<p class="lead">Write and run C# code using <a href="https://github.com/dotnet/interactive" target="_blank">.NET Interactive</a> — execution is handled by the InteractiveServer back-end.</p>
+<p class="lead">Write and run C# or F# code using <a href="https://github.com/dotnet/interactive" target="_blank">.NET Interactive</a> — execution is handled by the InteractiveServer back-end.</p>
 
 <div class="editor-container">
     <div class="d-flex justify-content-between align-items-center mb-2">
-        <label class="fw-bold" for="codeEditor">C# Code</label>
+        <div class="d-flex align-items-center gap-2">
+            <label class="fw-bold text-nowrap" for="codeEditor">Language:</label>
+            <select id="languageSelect" class="form-select form-select-sm language-select"
+                    @bind="_language" @bind:after="OnLanguageChanged">
+                <option value="csharp">C#</option>
+                <option value="fsharp">F#</option>
+            </select>
+        </div>
         <div>
             <button class="btn btn-sm btn-outline-secondary me-2" @onclick="LoadSample">Load Sample</button>
             <button class="btn btn-sm btn-outline-danger me-2" @onclick="ClearOutput">Clear Output</button>
@@ -33,7 +40,7 @@
               spellcheck="false"
               @bind="_code"
               @bind:event="oninput"
-              placeholder="Enter C# code here…"></textarea>
+              placeholder="@($"Enter {DisplayLanguage} code here…")"></textarea>
 </div>
 
 @if (_statusMessage is not null)
@@ -72,6 +79,7 @@
     #codeEditor { background: #1e1e1e; color: #d4d4d4; border: 1px solid #444; font-size: 0.9rem; resize: vertical; }
     .output-box { background: #0d0d0d; color: #a8ff78; border: 1px solid #333; border-radius: 4px; padding: 1rem; min-height: 80px; white-space: pre-wrap; word-break: break-all; }
     label.fw-bold { color: #ccc; }
+    .language-select { background-color: #2d2d2d; color: #d4d4d4; border-color: #555; width: auto; min-width: 90px; }
 </style>
 
 @code {
@@ -79,6 +87,9 @@
     // and falls back to localhost:5000 for local dev.
     private string _serverUrl = "http://localhost:5000";
 
+    private string _language = "csharp";
+
+    private string DisplayLanguage => _language == "fsharp" ? "F#" : "C#";
     private string _code = @"using System;
 
 int Fibonacci(int n) => n <= 1 ? n : Fibonacci(n - 1) + Fibonacci(n - 2);
@@ -128,7 +139,7 @@ for (int i = 0; i <= 10; i++)
         {
             var response = await Http.PostAsJsonAsync(
                 $"{_serverUrl}/api/execute",
-                new { code = _code });
+                new { code = _code, language = _language });
 
             if (!response.IsSuccessStatusCode)
             {
@@ -183,9 +194,29 @@ for (int i = 0; i <= 10; i++)
         _statusMessage = null;
     }
 
+    private void OnLanguageChanged()
+    {
+        LoadSample();
+    }
+
     private void LoadSample()
     {
-        _code = @"using System;
+        if (_language == "fsharp")
+        {
+            _code = @"open System
+
+let fibonacci n =
+    let rec fib a b count =
+        if count = 0 then a
+        else fib b (a + b) (count - 1)
+    fib 0 1 n
+
+for i in 0 .. 10 do
+    printfn $""Fibonacci({i}) = {fibonacci i}""";
+        }
+        else
+        {
+            _code = @"using System;
 using System.Linq;
 
 // Generate the first 15 primes
@@ -195,6 +226,7 @@ var primes = Enumerable.Range(2, 100)
 
 Console.WriteLine(""First 15 prime numbers:"");
 Console.WriteLine(string.Join("", "", primes));";
+        }
         ClearOutput();
     }
 

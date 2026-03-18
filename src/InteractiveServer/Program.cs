@@ -30,13 +30,25 @@ await kernel.InitialiseAsync();
 
 app.UseCors();
 
-// POST /api/execute  { "code": "..." }  →  { "output": "...", "errors": ["..."] }
+// POST /api/execute  { "code": "...", "language": "csharp" }  →  { "output": "...", "errors": ["..."] }
+// Supported languages: "csharp" (default), "fsharp"
 app.MapPost("/api/execute", async (ExecuteRequest req, DotNetInteractiveKernel k) =>
 {
     if (string.IsNullOrWhiteSpace(req.Code))
         return Results.BadRequest(new ExecuteResponse("", new[] { "Code must not be empty." }));
 
-    var result = await k.ExecuteAsync(req.Code, TimeSpan.FromSeconds(30));
+    var language = req.Language?.ToLowerInvariant() switch
+    {
+        "fsharp" or "f#" => "fsharp",
+        "csharp" or "c#" or null or "" => "csharp",
+        _ => null
+    };
+
+    if (language is null)
+        return Results.BadRequest(new ExecuteResponse("",
+            new[] { $"Unsupported language '{req.Language}'. Supported: csharp, fsharp." }));
+
+    var result = await k.ExecuteAsync(req.Code, language, TimeSpan.FromSeconds(30));
     return Results.Ok(result);
 });
 
@@ -45,7 +57,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", kernelReady = kernel
 app.Run();
 
 // ── Records ─────────────────────────────────────────────────────────────────
-record ExecuteRequest(string Code);
+record ExecuteRequest(string Code, string? Language = null);
 record ExecuteResponse(string Output, IReadOnlyList<string> Errors);
 
 // ── .NET Interactive kernel wrapper ─────────────────────────────────────────
@@ -108,7 +120,7 @@ sealed class DotNetInteractiveKernel : IAsyncDisposable
             throw new TimeoutException("dotnet-interactive did not become ready within 60 s.");
     }
 
-    public async Task<ExecuteResponse> ExecuteAsync(string code, TimeSpan timeout)
+    public async Task<ExecuteResponse> ExecuteAsync(string code, string language, TimeSpan timeout)
     {
         var token = $"tok-{Interlocked.Increment(ref _tokenCounter)}";
         var pending = new PendingSubmission();
@@ -117,7 +129,7 @@ sealed class DotNetInteractiveKernel : IAsyncDisposable
         var envelope = new
         {
             commandType = "SubmitCode",
-            command = new { code, targetKernelName = "csharp" },
+            command = new { code, targetKernelName = language },
             token,
             routingSlip = Array.Empty<string>()
         };
