@@ -1,0 +1,256 @@
+@page "/"
+@using System.Net.Http
+@using System.Net.Http.Json
+@inject HttpClient Http
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>.NET Interactive (WASM)</PageTitle>
+
+<h1>🚀 .NET Interactive — Blazor WASM</h1>
+<p class="lead">Write and run C# or F# code using <a href="https://github.com/dotnet/interactive" target="_blank">.NET Interactive</a> — execution is handled by the InteractiveServer back-end.</p>
+
+<div class="editor-container">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="d-flex align-items-center gap-2">
+            <label class="fw-bold text-nowrap" for="languageSelect">Language:</label>
+            <select id="languageSelect" class="form-select form-select-sm language-select"
+                    @bind="_language" @bind:after="OnLanguageChanged">
+                <option value="csharp">C#</option>
+                <option value="fsharp">F#</option>
+            </select>
+        </div>
+        <div>
+            <button class="btn btn-sm btn-outline-secondary me-2" @onclick="LoadSample">Load Sample</button>
+            <button class="btn btn-sm btn-outline-danger me-2" @onclick="ClearOutput">Clear Output</button>
+            <button class="btn btn-primary" @onclick="RunCode" disabled="@_isRunning">
+                @if (_isRunning)
+                {
+                    <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                    <span>Running…</span>
+                }
+                else
+                {
+                    <span>▶ Run</span>
+                }
+            </button>
+        </div>
+    </div>
+    <div id="monacoContainer" style="height: 350px; border-radius: 4px; overflow: hidden;"></div>
+</div>
+
+@if (_statusMessage is not null)
+{
+    <div class="alert @_statusClass mt-3" role="alert">@_statusMessage</div>
+}
+
+@if (_output is not null)
+{
+    <div class="mt-3">
+        <label class="fw-bold">Output</label>
+        <pre class="output-box">@_output</pre>
+    </div>
+}
+
+@if (_errors.Count > 0)
+{
+    <div class="mt-3">
+        <label class="fw-bold text-danger">Errors / Diagnostics</label>
+        <ul class="list-group">
+            @foreach (var e in _errors)
+            {
+                <li class="list-group-item list-group-item-danger font-monospace small">@e</li>
+            }
+        </ul>
+    </div>
+}
+
+<div class="mt-4 text-muted small">
+    <strong>Server:</strong> @_serverUrl &nbsp;|&nbsp;
+    <strong>Status:</strong> @_serverStatus
+</div>
+
+<style>
+    .editor-container { background: #1e1e1e; border-radius: 6px; padding: 1rem; }
+    #monacoContainer { background: #1e1e1e; border: 1px solid #444; border-radius: 4px; }
+    .output-box { background: #0d0d0d; color: #a8ff78; border: 1px solid #333; border-radius: 4px; padding: 1rem; min-height: 80px; white-space: pre-wrap; word-break: break-all; }
+    label.fw-bold { color: #ccc; }
+    .language-select { background-color: #2d2d2d; color: #d4d4d4; border-color: #555; width: auto; min-width: 90px; }
+</style>
+
+@code {
+    // The InteractiveServer base URL. Reads from window.interactiveServerUrl (injected by index.html)
+    // and falls back to localhost:5000 for local dev.
+    private string _serverUrl = "http://localhost:5000";
+
+    private string _language = "csharp";
+    private bool _editorInitialized = false;
+
+    private string DisplayLanguage => _language == "fsharp" ? "F#" : "C#";
+    private string _code = @"using System;
+
+int Fibonacci(int n) => n <= 1 ? n : Fibonacci(n - 1) + Fibonacci(n - 2);
+
+for (int i = 0; i <= 10; i++)
+    Console.WriteLine($""Fibonacci({i}) = {Fibonacci(i)}"");";
+
+    private string? _output;
+    private string? _statusMessage;
+    private string _statusClass = "alert-info";
+    private List<string> _errors = new();
+    private bool _isRunning;
+    private string _serverStatus = "Not connected";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CheckServerHealthAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await JS.InvokeVoidAsync("monacoInterop.initialize", "monacoContainer", _code, _language);
+            _editorInitialized = true;
+        }
+    }
+
+    private async Task CheckServerHealthAsync()
+    {
+        try
+        {
+            _serverStatus = "Connecting…";
+            var resp = await Http.GetFromJsonAsync<HealthResponse>($"{_serverUrl}/health");
+            _serverStatus = resp?.KernelReady == true
+                ? "✅ .NET Interactive kernel ready"
+                : "⚠️ Server running but kernel not ready";
+        }
+        catch
+        {
+            _serverStatus = "❌ Cannot reach InteractiveServer — start it with: dotnet run --project src/InteractiveServer";
+        }
+        StateHasChanged();
+    }
+
+    private async Task RunCode()
+    {
+        if (_isRunning) return;
+        _isRunning = true;
+        _output = null;
+        _errors.Clear();
+        _statusMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            _code = await JS.InvokeAsync<string>("monacoInterop.getValue");
+
+            var response = await Http.PostAsJsonAsync(
+                $"{_serverUrl}/api/execute",
+                new { code = _code, language = _language });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _statusMessage = $"❌ Server returned {(int)response.StatusCode} {response.ReasonPhrase}.";
+                _statusClass = "alert-danger";
+                return;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<ExecuteResponse>();
+            if (result is null)
+            {
+                _statusMessage = "❌ Unexpected empty response from server.";
+                _statusClass = "alert-danger";
+                return;
+            }
+
+            _output = result.Output;
+            _errors = result.Errors?.ToList() ?? new();
+
+            if (_errors.Count == 0)
+            {
+                _statusMessage = "✅ Execution completed successfully.";
+                _statusClass = "alert-success";
+            }
+            else
+            {
+                _statusMessage = "❌ Execution completed with errors.";
+                _statusClass = "alert-danger";
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            _statusMessage = $"💥 Could not reach server: {ex.Message}";
+            _statusClass = "alert-danger";
+            await CheckServerHealthAsync();
+        }
+        catch (Exception ex)
+        {
+            _statusMessage = $"💥 Unexpected error: {ex.Message}";
+            _statusClass = "alert-danger";
+        }
+        finally
+        {
+            _isRunning = false;
+        }
+    }
+
+    private void ClearOutput()
+    {
+        _output = null;
+        _errors.Clear();
+        _statusMessage = null;
+    }
+
+    private async Task OnLanguageChanged()
+    {
+        await LoadSample();
+        if (_editorInitialized)
+            await JS.InvokeVoidAsync("monacoInterop.setLanguage", _language);
+    }
+
+    private async Task LoadSample()
+    {
+        if (_language == "fsharp")
+        {
+            _code = @"open System
+
+let fibonacci n =
+    let rec fib a b count =
+        if count = 0 then a
+        else fib b (a + b) (count - 1)
+    fib 0 1 n
+
+for i in 0 .. 10 do
+    printfn $""Fibonacci({i}) = {fibonacci i}""";
+        }
+        else
+        {
+            _code = @"using System;
+using System.Linq;
+
+// Generate the first 15 primes
+var primes = Enumerable.Range(2, 100)
+    .Where(n => Enumerable.Range(2, (int)Math.Sqrt(n) - 1).All(i => n % i != 0))
+    .Take(15);
+
+Console.WriteLine(""First 15 prime numbers:"");
+Console.WriteLine(string.Join("", "", primes));";
+        }
+        ClearOutput();
+        if (_editorInitialized)
+            await JS.InvokeVoidAsync("monacoInterop.setValue", _code);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_editorInitialized)
+            await JS.InvokeVoidAsync("monacoInterop.dispose");
+    }
+
+    // ── Response types ───────────────────────────────────────────────────────
+
+    private record HealthResponse(string Status, bool KernelReady);
+    private record ExecuteResponse(string Output, IReadOnlyList<string> Errors);
+}
+

@@ -26,13 +26,9 @@ jobs:
         dotnet-version: '8.0.x'
         include-prerelease: true
     
-    # Run Tests
-#     - name: Unit Testing
-#       run: dotnet test Blazor-FluentUI.csproj
-    
     # publishes Blazor project to the release-folder
     - name: Publish .NET Core Project
-      run: dotnet publish src/MyApp/MyApp.csproj -c Release -o release --nologo #-f net8.0
+      run: dotnet publish src/BlazorApp/BlazorApp.csproj -c Release -o release --nologo
     
     # changes the base-tag in index.html from '/' to 'dotnet-interactive-blazor-wasm' to match GitHub Pages repository subdirectory
     - name: Change base-tag in index.html from / to Interactive
